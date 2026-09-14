@@ -1,11 +1,36 @@
+# Python 虚拟环境和字节码缓存
 .venv/
 venv/
+env/
 __pycache__/
 *.py[cod]
+
+# IDE 本地配置
 .idea/
 .vscode/
+
+# 本地环境变量和登录凭据
 .env
 .env.*
+!.env.example
+!.env.sample
 auth.json
 .codex/
+
+# 测试、检查工具的缓存和覆盖率文件
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# 构建产物和包信息
+build/
+dist/
+*.egg-info/
+
+# 日志和操作系统临时文件
 *.log
+.DS_Store
+Thumbs.db

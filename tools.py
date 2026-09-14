@@ -19,6 +19,24 @@ TOOL_DEFINITIONS = [
             "additionalProperties": False,
         },
         "strict": True,
+    },
+    {
+        # 这份说明告诉模型：不知道文件名时，先查看目录再决定读什么。
+        "type": "function",
+        "name": "list_files",
+        "description": "列出项目中指定目录下的文件和子目录，不递归。不知道文件名时先用它查看。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "相对项目根目录的目录路径；查看项目根目录时传入 .",
+                }
+            },
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+        "strict": True,
     }
 ]
 
@@ -40,12 +58,40 @@ def read_file(path):
         return f"读取失败：{error}"
 
 
+def list_files(path):
+    """只列指定目录的直接内容，返回模型可以阅读的文件清单。"""
+    if not isinstance(path, str):
+        return "查看失败：path 必须是字符串。"
+    try:
+        # 模型传入 . 时，就是查看项目根目录；不依赖终端启动位置。
+        directory = (PROJECT_DIR / path).resolve()
+        if not directory.is_relative_to(PROJECT_DIR):
+            return "查看失败：只能查看当前项目中的目录。"
+        if not directory.is_dir():
+            return "查看失败：目录不存在，或者传入的是一个文件。"
+
+        entries = []
+        # 只看一层，不自动钻进 .venv 等子目录，避免一次返回大量文件。
+        for item in sorted(directory.iterdir()):
+            # 类型标签让模型区分：文件可以读，目录可以继续列。
+            kind = "目录" if item.is_dir() else "文件"
+            entries.append(f"[{kind}] {item.name}")
+        return "\n".join(entries) or "这个目录是空的。"
+    except (OSError, ValueError) as error:
+        # 失败也返回文字，Agent 会把原因交回模型，让它决定下一步。
+        return f"查看失败：{error}"
+
+
 def execute_tool(name, arguments):
     """工具的统一入口：模型给出名称和参数，我们选择对应函数执行。"""
     # 例如 name="read_file"，arguments={"path": "hello.txt"}。
     # 工具说明只告诉模型怎样提出请求；这个分支才把请求接到真实函数。
     if name == "read_file":
         return read_file(arguments["path"])
+
+    # 统一入口现在可以分派两种工具，main.py 的循环不需要改。
+    if name == "list_files":
+        return list_files(arguments["path"])
 
     # 以后新增工具时，在这里添加分支，并在 TOOL_DEFINITIONS 中添加说明。
     # main.py 的循环就不用跟着每个新工具改动了。

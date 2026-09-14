@@ -11,6 +11,7 @@ def ask_model(messages):
         "model": MODEL,
         "instructions": (
             "你是一个编程助手，用中文回答。"
+            "不知道文件名时，使用 list_files 查看目录。"
             "需要了解文件内容时，使用 read_file 工具。"
             "不要编造没有读取过的文件内容。"
             "工具执行失败时，如实解释原因。"
