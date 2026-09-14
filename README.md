@@ -1,2 +1,2 @@
 # mini_claude
-最简单的claude
+最简单的claude code
