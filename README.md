@@ -12,7 +12,8 @@
 - run_shell：执行命令，返回输出或错误，等待超时为 30 秒。
 - write_file：按原教程使用 file_path/content 创建或覆盖 UTF-8 文本文件，自动创建父目录。
 - edit_file：按原教程精确替换唯一匹配的原文，找不到或匹配多处时不写入。
-- execute_tool：统一分派工具请求。
+- execute_tool：通过名称与函数的映射统一分派工具请求。
+- 工具结果截断：超过 50000 字符时保留头尾，并标明中间省略的字符数。
 - 单次任务最多请求模型 10 次。
 
 ## 运行
@@ -57,6 +58,8 @@ python -m venv .venv
 write_file 的参数、创建及覆盖行为、行数计算和错误返回与第二章 Python 教学代码一致。工具定义为适配现有 GPT 接口，使用 parameters（原文 Anthropic 使用 input_schema）。read_file 仍是此前教学版本（path 参数、项目内读取），尚未按原文校正。list_files、grep_search、run_shell 已按第二章最初的 Python 实现补齐。list_files 和 grep_search 显式关闭 strict，保留原文 path 可选的含义。
 
 edit_file 当前对应第二章最初的 Python 实现：精确匹配和唯一性检查。尚未添加后文的引号容错、Diff 输出或 mtime 防护。
+
+工具结果截断对应第二章“工具结果截断”：所有已注册工具经过统一入口，短结果原样返回，长结果保留头尾。当前 read_file 仍使用早期教学版的 path 参数，因此分派器中保留了一层参数适配。
 
 ## 本次工具阅读与实验
 

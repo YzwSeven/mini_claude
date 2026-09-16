@@ -4,6 +4,9 @@ import re
 import subprocess
 from pathlib import Path
 
+# 原教程把单次工具结果限制为 50000 个字符，避免过长内容占满模型上下文。
+MAX_RESULT_CHARS = 50000
+
 # 这份说明通过 tools 字段发给模型，不会自动执行下面的函数。
 TOOL_DEFINITIONS = [
     {
@@ -245,36 +248,49 @@ def _edit_file(inp: dict) -> str:
         return f"Error editing file: {e}"
 
 
+
+def _truncate_result(result: str) -> str:
+    """结果过长时保留开头和结尾，并明确告诉模型中间省略了多少字符。"""
+    # 短结果不需要处理，原样交回模型。
+    if len(result) <= MAX_RESULT_CHARS:
+        return result
+
+    # 为中间的截断说明预留约 60 个字符，剩余空间平均分给头部和尾部。
+    keep_each = (MAX_RESULT_CHARS - 60) // 2
+    return (
+        result[:keep_each]
+        + f"\n\n[... truncated {len(result) - keep_each * 2} chars ...]\n\n"
+        + result[-keep_each:]
+    )
+
+
+def _read_file_from_arguments(arguments: dict) -> str:
+    """把统一的参数字典转换成当前 read_file 函数需要的 path。"""
+    # 当前项目的 read_file 仍是早期教学版；这里只适配调用方式，不改变读取行为。
+    return read_file(arguments["path"])
+
+
 def execute_tool(name, arguments):
-    """工具的统一入口：模型给出名称和参数，我们选择对应函数执行。"""
-    # 例如 name="read_file"，arguments={"path": "hello.txt"}。
-    # 工具说明只告诉模型怎样提出请求；这个分支才把请求接到真实函数。
-    if name == "read_file":
-        return read_file(arguments["path"])
+    """根据工具名称找到函数，执行后统一截断过长结果。"""
+    # 字典表达“工具名称对应哪个 Python 函数”，新增工具时只需增加一项。
+    handlers = {
+        "read_file": _read_file_from_arguments,
+        "write_file": _write_file,
+        "edit_file": _edit_file,
+        "list_files": _list_files,
+        "grep_search": _grep_search,
+        "run_shell": _run_shell,
+    }
 
-    # 统一入口把不同工具请求交给对应函数，main.py 的循环不需要改。
-    if name == "list_files":
-        return _list_files(arguments)
+    # get 找不到名称时返回 None，不会意外执行任何函数。
+    handler = handlers.get(name)
+    if not handler:
+        # 错误也作为普通文字返回，让模型知道自己请求了不存在的工具。
+        return f"执行失败：没有名为 {name} 的工具。"
 
-    # 搜索和命令执行也走同一入口，结果由 main.py 原有循环回传。
-    if name == "grep_search":
-        return _grep_search(arguments)
-
-    if name == "run_shell":
-        return _run_shell(arguments)
-
-    # 写文件需要两个参数；模型负责生成内容，工具负责实际保存。
-    if name == "write_file":
-        return _write_file(arguments)
-
-    # 参数字典直接交给编辑工具，Agent 循环仍不需要知道替换细节。
-    if name == "edit_file":
-        return _edit_file(arguments)
-
-    # 以后新增工具时，在这里添加分支，并在 TOOL_DEFINITIONS 中添加说明。
-    # main.py 的循环就不用跟着每个新工具改动了。
-    # 未实现的工具不会执行；把原因交回模型，让它调整下一步。
-    return f"执行失败：没有名为 {name} 的工具。"
+    # 所有已注册工具都经过同一个出口，因此统一受到 50000 字符保护。
+    result = handler(arguments)
+    return _truncate_result(result)
 
 
 if __name__ == "__main__":
