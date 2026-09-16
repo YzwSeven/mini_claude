@@ -12,16 +12,16 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "name": "read_file",
-        "description": "读取当前项目中一个 UTF-8 文本文件的内容。",
+        "description": "读取一个 UTF-8 文本文件的内容并添加行号，便于定位。",
         "parameters": {
             "type": "object",
             "properties": {
-                "path": {
+                "file_path": {
                     "type": "string",
-                    "description": "相对于项目根目录的文件路径，例如 hello.txt",
+                    "description": "要读取的文件路径，例如 hello.txt",
                 }
             },
-            "required": ["path"],
+            "required": ["file_path"],
             "additionalProperties": False,
         },
         "strict": True,
@@ -125,22 +125,17 @@ TOOL_DEFINITIONS = [
     }
 ]
 
-# 以本文件所在目录为项目根目录，避免启动位置不同导致找不到文件。
-PROJECT_DIR = Path(__file__).resolve().parent
-
-
-def read_file(path):
-    """返回文件内容；读取失败也返回文字，让模型知道失败原因。"""
-    if not isinstance(path, str):
-        return "读取失败：path 必须是字符串。"
+def _read_file(inp: dict) -> str:
+    """按原教程读取文件，并给每一行加上便于模型定位的行号。"""
     try:
-        file_path = (PROJECT_DIR / path).resolve()
-        # 工具只开放项目内的文件，不允许通过 ../ 读取项目外的内容。
-        if not file_path.is_relative_to(PROJECT_DIR):
-            return "读取失败：只能读取当前项目中的文件。"
-        return file_path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError, ValueError) as error:
-        return f"读取失败：{error}"
+        # errors="replace" 让混合编码文件也能返回内容，不因单个异常字节整体失败。
+        content = Path(inp["file_path"]).read_text(encoding="utf-8", errors="replace")
+        lines = content.split("\n")
+        # 行号只供模型定位；edit_file 的 old_string 仍必须使用不带行号的实际原文。
+        numbered = "\n".join(f"{i + 1:4d} | {line}" for i, line in enumerate(lines))
+        return numbered
+    except Exception as e:
+        return f"Error reading file: {e}"
 
 
 def _list_files(inp: dict) -> str:
@@ -333,17 +328,35 @@ def _truncate_result(result: str) -> str:
     )
 
 
-def _read_file_from_arguments(arguments: dict) -> str:
-    """把统一的参数字典转换成当前 read_file 函数需要的 path。"""
-    # 当前项目的 read_file 仍是早期教学版；这里只适配调用方式，不改变读取行为。
-    return read_file(arguments["path"])
+def execute_tool(name, arguments, read_file_state=None):
+    """执行工具，并用读取时间阻止基于旧内容修改已有文件。"""
+    # read_file 单独处理：读取成功后，记录绝对路径和当时的修改时间。
+    if name == "read_file":
+        result = _read_file(arguments)
+        if read_file_state is not None and not result.startswith("Error"):
+            abs_path = str(Path(arguments["file_path"]).resolve())
+            try:
+                read_file_state[abs_path] = os.path.getmtime(abs_path)
+            except OSError:
+                # 文件可能恰好在读取后被删除；此时不留下无效的读取记录。
+                pass
+        return _truncate_result(result)
 
+    # 已有文件在写入或编辑前必须读过；新文件不存在，所以可以直接创建。
+    if name in ("write_file", "edit_file") and read_file_state is not None:
+        abs_path = str(Path(arguments["file_path"]).resolve())
+        if os.path.exists(abs_path):
+            if abs_path not in read_file_state:
+                verb = "writing" if name == "write_file" else "editing"
+                return f"Error: You must read this file before {verb}. Use read_file first to see its current contents."
 
-def execute_tool(name, arguments):
-    """根据工具名称找到函数，执行后统一截断过长结果。"""
+            # 修改时间不同，说明读取后用户或其他程序又改过文件，必须重新读取。
+            if os.path.getmtime(abs_path) != read_file_state[abs_path]:
+                verb = "writing" if name == "write_file" else "editing"
+                return f"Warning: {arguments['file_path']} was modified externally since your last read. Please read_file again before {verb}."
+
     # 字典表达“工具名称对应哪个 Python 函数”，新增工具时只需增加一项。
     handlers = {
-        "read_file": _read_file_from_arguments,
         "write_file": _write_file,
         "edit_file": _edit_file,
         "list_files": _list_files,
@@ -360,9 +373,22 @@ def execute_tool(name, arguments):
 
     # 所有已注册工具都经过同一个出口，因此统一受到 50000 字符保护。
     result = handler(arguments)
+
+    # Agent 自己成功修改后也会改变 mtime；立刻更新，避免下次把自己的修改当成外部修改。
+    if (
+        name in ("write_file", "edit_file")
+        and read_file_state is not None
+        and not result.startswith("Error")
+    ):
+        abs_path = str(Path(arguments["file_path"]).resolve())
+        try:
+            read_file_state[abs_path] = os.path.getmtime(abs_path)
+        except OSError:
+            pass
+
     return _truncate_result(result)
 
 
 if __name__ == "__main__":
     # 单独运行这个文件，只测试读取函数，不请求模型。
-    print(read_file("hello.txt"))
+    print(_read_file({"file_path": "hello.txt"}))

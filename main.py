@@ -5,7 +5,7 @@ from codex_backend import ask_model
 from tools import execute_tool
 
 
-def run_agent(messages):
+def run_agent(messages, read_file_state):
     """完成一个用户任务。一次任务可能需要多次请求模型。"""
     # 这就是 Agent 的内层循环。限制次数，防止模型一直要求调用工具。
     for step in range(10):
@@ -39,11 +39,11 @@ def run_agent(messages):
         for call in tool_calls:
             print("调用工具：", call["name"], call["arguments"])
             try:
-                # arguments 是 JSON 字符串，把它还原成包含 path 的字典。
+                # arguments 是 JSON 字符串，把它还原成工具需要的参数字典。
                 arguments = json.loads(call["arguments"])
                 # Agent 只把工具名称和参数交出去，不关心具体怎么读取文件。
-                # tools.py 负责选择函数并执行，返回值仍是交给模型的结果文字。
-                result = execute_tool(call["name"], arguments)
+                # 同一份读取状态也交给 tools.py，用来保护后续写入和编辑。
+                result = execute_tool(call["name"], arguments, read_file_state)
             except (ValueError, KeyError, TypeError, OSError) as error:
                 # 参数错误也作为结果交回模型，让它有机会修正请求。
                 result = f"工具执行失败：{error}"
@@ -64,6 +64,9 @@ def run_agent(messages):
 def main():
     # 这份历史在程序运行期间保留；退出后不会自动保存到硬盘。
     messages = []
+    # 记录这个 Agent 读过哪些文件，以及读取时的修改时间。
+    # 它放在外层循环外，所以一次读取可供同一对话后续的编辑检查使用。
+    read_file_state = {}
     print("Mini Claude 已启动，输入 exit 退出。")
 
     # 外层循环等用户的新任务；run_agent 内层循环处理同一个任务。
@@ -81,15 +84,18 @@ def main():
         # 先在历史副本中处理任务。网络失败时，不保留半截工具请求。
         # 这里只回退对话记录，不会撤销已经创建的文件；工具操作不是事务。
         turn_messages = messages.copy()
+        # 与对话历史一起使用副本；本轮失败时，不保留没有对应历史的读取记录。
+        turn_read_file_state = read_file_state.copy()
         turn_messages.append({"role": "user", "content": user_input})
         try:
-            run_agent(turn_messages)
+            run_agent(turn_messages, turn_read_file_state)
         except KeyboardInterrupt:
             print("\n已中断本轮，可以输入新任务。")
         except (RuntimeError, OSError, ValueError, KeyError, TypeError) as error:
             print("本轮失败：", error)
         else:
             messages = turn_messages
+            read_file_state = turn_read_file_state
 
 
 if __name__ == "__main__":

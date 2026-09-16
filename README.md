@@ -6,7 +6,7 @@
 
 - 终端连续对话和内存中的消息历史。
 - GPT-5.5 模型调用。
-- read_file：读取项目内的 UTF-8 文本文件。
+- read_file：读取 UTF-8 文本文件并显示行号，同时记录读取时的文件修改时间。
 - list_files：按 pattern（例如 **/*.py）查找文件，可选 path，最多返回 200 个。
 - grep_search：按正则搜索内容，优先系统 grep，没有则用 Python 遍历目录，最多返回 100 行。
 - run_shell：执行命令，返回输出或错误，等待超时为 30 秒。
@@ -15,6 +15,7 @@
 - edit_file：按原教程精确替换唯一匹配的原文，找不到或匹配多处时不写入。
 - execute_tool：通过名称与函数的映射统一分派工具请求。
 - 工具结果截断：超过 50000 字符时保留头尾，并标明中间省略的字符数。
+- Read-before-edit：已有文件必须先读取；读取后被外部修改时，必须重新读取。
 - 单次任务最多请求模型 10 次。
 
 ## 运行
@@ -56,11 +57,13 @@ python -m venv .venv
 
 ## 当前与原教程的对应关系
 
-write_file 的参数、创建及覆盖行为、行数计算和错误返回与第二章 Python 教学代码一致。工具定义为适配现有 GPT 接口，使用 parameters（原文 Anthropic 使用 input_schema）。read_file 仍是此前教学版本（path 参数、项目内读取），尚未按原文校正。list_files、grep_search、run_shell 已按第二章最初的 Python 实现补齐。list_files 和 grep_search 显式关闭 strict，保留原文 path 可选的含义。
+write_file 的参数、创建及覆盖行为、行数计算和错误返回与第二章 Python 教学代码一致。工具定义为适配现有 GPT 接口，使用 parameters（原文 Anthropic 使用 input_schema）。read_file 已改用原文的 file_path 参数并返回行号。list_files、grep_search、run_shell 已按第二章最初的 Python 实现补齐。list_files 和 grep_search 显式关闭 strict，保留原文 path 可选的含义。
 
-edit_file 当前对应第二章最初的 Python 实现：精确匹配和唯一性检查。尚未添加后文的引号容错、Diff 输出或 mtime 防护。
+edit_file 当前对应第二章最初的精确匹配和唯一性检查，并已接入本节的 Read-before-edit 与 mtime 防护。后续的引号容错和 Diff 输出尚未添加。
 
-工具结果截断对应第二章“工具结果截断”：所有已注册工具经过统一入口，短结果原样返回，长结果保留头尾。当前 read_file 仍使用早期教学版的 path 参数，因此分派器中保留了一层参数适配。
+工具结果截断对应第二章“工具结果截断”：所有已注册工具经过统一入口，短结果原样返回，长结果保留头尾。
+
+read_file 已对齐原教程的 file_path 参数，并为返回内容添加行号。Agent 在整个运行期间保存绝对路径及读取时的 mtime；写入或编辑已有文件前必须有读取记录且 mtime 未变化。新文件可以直接创建，成功写入或编辑后会更新记录。
 
 web_fetch 对应第二章“WebFetch 工具”。章节展示 TypeScript 代码，本项目使用原仓库 Python 版的标准库 urllib 实现，不需要安装额外依赖。工具只接受 HTTP/HTTPS，等待超时为 30 秒；HTML 会删除 script、style 和标签，网络错误会作为结果返回模型。
 
