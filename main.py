@@ -79,7 +79,7 @@ def main():
             continue
 
         # 先在历史副本中处理任务。网络失败时，不保留半截工具请求。
-        # 这里只回退对话记录，不是撤销工具动作；当前工具只有读取。
+        # 这里只回退对话记录，不会撤销已经创建的文件；工具操作不是事务。
         turn_messages = messages.copy()
         turn_messages.append({"role": "user", "content": user_input})
         try:

@@ -1,4 +1,5 @@
 """工具分两部分：给模型看的说明，以及在本机执行的函数。"""
+import os
 from pathlib import Path
 
 # 这份说明通过 tools 字段发给模型，不会自动执行下面的函数。
@@ -34,6 +35,22 @@ TOOL_DEFINITIONS = [
                 }
             },
             "required": ["path"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
+    {
+        # 模型需要提供两项信息：保存到哪里，以及保存什么文字。
+        "type": "function",
+        "name": "write_file",
+        "description": "写入 UTF-8 文本文件：不存在则创建，存在则覆盖，自动创建父目录。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "file_path": {"type": "string", "description": "要写入的文件路径，例如 notes/summary.txt"},
+                "content": {"type": "string", "description": "要写入文件的完整文字内容"},
+            },
+            "required": ["file_path", "content"],
             "additionalProperties": False,
         },
         "strict": True,
@@ -82,6 +99,27 @@ def list_files(path):
         return f"查看失败：{error}"
 
 
+def _write_file(inp: dict) -> str:
+    """按原教程第二章写入完整文件：不存在就创建，存在就覆盖。"""
+    try:
+        # file_path 与 content 是原文的参数名，统一入口把参数字典传进来。
+        # 相对路径以当前工作目录为基准，与原文一致；请在项目根目录启动。
+        d = os.path.dirname(inp["file_path"])
+        # 例如 notes/summary.txt 需要先创建 notes；单独 summary.txt 则不需要。
+        if d and not os.path.exists(d):
+            os.makedirs(d, exist_ok=True)
+        # w 会覆盖原有内容，所以 content 必须是想保存的完整文件内容。
+        # 局部替换由后续章节中的 edit_file 实现。
+        with open(inp["file_path"], "w", encoding="utf-8") as f:
+            f.write(inp["content"])
+        # 保留原文按换行符拆分计算行数的方式和返回格式。
+        n = len(inp["content"].split("\n"))
+        return f"Successfully wrote to {inp['file_path']} ({n} lines)"
+    except Exception as e:
+        # 将失败原因交回模型，由模型结合结果决定下一步。
+        return f"Error writing file: {e}"
+
+
 def execute_tool(name, arguments):
     """工具的统一入口：模型给出名称和参数，我们选择对应函数执行。"""
     # 例如 name="read_file"，arguments={"path": "hello.txt"}。
@@ -89,9 +127,13 @@ def execute_tool(name, arguments):
     if name == "read_file":
         return read_file(arguments["path"])
 
-    # 统一入口现在可以分派两种工具，main.py 的循环不需要改。
+    # 统一入口把不同工具请求交给对应函数，main.py 的循环不需要改。
     if name == "list_files":
         return list_files(arguments["path"])
+
+    # 写文件需要两个参数；模型负责生成内容，工具负责实际保存。
+    if name == "write_file":
+        return _write_file(arguments)
 
     # 以后新增工具时，在这里添加分支，并在 TOOL_DEFINITIONS 中添加说明。
     # main.py 的循环就不用跟着每个新工具改动了。

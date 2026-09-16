@@ -8,6 +8,7 @@
 - GPT-5.5 模型调用。
 - read_file：读取项目内的 UTF-8 文本文件。
 - list_files：列出项目内目录的直接内容。
+- write_file：按原教程使用 file_path/content 创建或覆盖 UTF-8 文本文件，自动创建父目录。
 - execute_tool：统一分派工具请求。
 - 单次任务最多请求模型 10 次。
 
@@ -42,8 +43,12 @@ python -m venv .venv
 
 程序从 CODEX_HOME（未设置时为用户目录下的 .codex）读取已有 auth.json。请勿把登录令牌或该文件提交到仓库。认证失败时重新使用 codex login 登录。
 
-工具在本机执行；读取到的文件内容会作为后续模型请求的一部分发送给模型服务。当前支持 read_file 和 list_files，尚未实现写文件或命令执行工具。
+工具在本机执行；读取到的文件内容会作为后续模型请求的一部分发送给模型服务。当前支持 read_file、list_files 和 write_file；写入会覆盖已有文件，尚未实现局部编辑或命令执行工具。write_file 与原文一样以当前工作目录解析相对路径，不额外限制为项目目录。
 
 ## 学习参考
 
 本项目跟随 [claude-code-from-scratch](https://github.com/Windy3f3f3f3f/claude-code-from-scratch) 学习 Agent 核心架构，采用 Python 手写逐步实现。
+
+## 当前与原教程的对应关系
+
+write_file 的参数、创建及覆盖行为、行数计算和错误返回与第二章 Python 教学代码一致。工具定义为适配现有 GPT 接口，使用 parameters（原文 Anthropic 使用 input_schema）。read_file 和 list_files 仍是此前教学版本，后续按原文对应内容校正。
