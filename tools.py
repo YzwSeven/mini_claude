@@ -74,6 +74,23 @@ TOOL_DEFINITIONS = [
         "strict": True,
     },
     {
+        # url 必填；max_length 可省略，默认最多读取 50000 个字符。
+        "type": "function",
+        "name": "web_fetch",
+        "description": "读取 HTTP 或 HTTPS 地址并返回文本；HTML 页面会去掉标签。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "要读取的 HTTP 或 HTTPS 地址"},
+                "max_length": {"type": "number", "description": "最多返回多少个字符，默认 50000"},
+            },
+            "required": ["url"],
+            "additionalProperties": False,
+        },
+        # GPT 协议适配：关闭严格模式，保留原文 max_length 可省略的含义。
+        "strict": False,
+    },
+    {
         # 模型需要提供两项信息：保存到哪里，以及保存什么文字。
         "type": "function",
         "name": "write_file",
@@ -204,6 +221,58 @@ def _run_shell(inp: dict) -> str:
     except Exception as e:
         return f"Error: {e}"
 
+
+def _web_fetch(inp: dict) -> str:
+    """读取网页或 HTTP 接口；HTML 会转换成更适合模型阅读的纯文本。"""
+    # urllib 属于 Python 标准库，不需要通过 pip 安装额外依赖。
+    import urllib.error
+    import urllib.request
+
+    url = inp.get("url", "")
+    max_length = inp.get("max_length", 50000)
+
+    # Python 的 urllib 还能打开 file:// 等地址；这里只允许真正的网页协议。
+    if not url.lower().startswith(("http://", "https://")):
+        return "Error: only http(s) URLs are supported"
+
+    # User-Agent 告诉网站请求来自我们的程序，部分网站会拒绝没有该请求头的访问。
+    req = urllib.request.Request(url, headers={"User-Agent": "mini-claude/1.0"})
+    try:
+        # 最多等待 30 秒，避免一个无响应的网址卡住整个 Agent 循环。
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            content_type = resp.headers.get("Content-Type", "")
+            # 无法按 UTF-8 解码的字节用替代字符表示，不让整个工具因此失败。
+            text = resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:
+        # 服务器明确返回 404、500 等 HTTP 状态码时走这里。
+        return f"HTTP error: {e.code} {e.reason}"
+    except urllib.error.URLError as e:
+        # DNS、拒绝连接等网络错误作为普通工具结果交回模型。
+        return f"Error fetching {url}: {e.reason}"
+    except Exception as e:
+        return f"Error fetching {url}: {e}"
+
+    if "html" in content_type:
+        # 模型不需要 script 和 style 的代码，先把这两类完整区块删除。
+        text = re.sub(r"<script[\s\S]*?</script>", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"<style[\s\S]*?</style>", "", text, flags=re.IGNORECASE)
+        # 删除剩余 HTML 标签，并还原原文处理的常见 HTML 实体。
+        text = re.sub(r"<[^>]*>", " ", text)
+        text = text.replace("&nbsp;", " ").replace("&amp;", "&")
+        text = text.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", '"')
+        # 合并多余空白，减少无意义内容占用模型上下文。
+        text = re.sub(r"\s{2,}", " ", text)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        text = text.strip()
+
+    # 这是 WebFetch 自己的可调上限；统一入口之后还会应用所有工具的总上限。
+    if len(text) > max_length:
+        text = text[:max_length] + f"\n\n[... truncated at {max_length} characters]"
+
+    # 空响应也返回明确文字，避免模型误以为工具没有执行。
+    return text or "(empty response)"
+
+
 def _write_file(inp: dict) -> str:
     """按原教程第二章写入完整文件：不存在就创建，存在就覆盖。"""
     try:
@@ -280,6 +349,7 @@ def execute_tool(name, arguments):
         "list_files": _list_files,
         "grep_search": _grep_search,
         "run_shell": _run_shell,
+        "web_fetch": _web_fetch,
     }
 
     # get 找不到名称时返回 None，不会意外执行任何函数。

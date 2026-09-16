@@ -16,6 +16,7 @@ def ask_model(messages):
             "用户要求保存结果时，使用 write_file，提供 file_path 和完整 content；目标不存在则创建，存在则覆盖。"
             "局部修改使用 edit_file，提供 file_path、精确且唯一的 old_string、new_string。"
             "写入或编辑后根据工具返回结果报告是否成功；失败时不要擅自换路径保存。"
+            "需要读取网页或 HTTP 接口时使用 web_fetch，提供 url 和可选的 max_length；只支持 HTTP 或 HTTPS。"
             "需要执行测试或命令时使用 run_shell，提供 command；当前是 Windows，命令使用 cmd 语法。不要编造没有读取过的文件内容。"
             "工具执行失败时，如实解释原因。"
         ),

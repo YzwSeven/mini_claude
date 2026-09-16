@@ -10,6 +10,7 @@
 - list_files：按 pattern（例如 **/*.py）查找文件，可选 path，最多返回 200 个。
 - grep_search：按正则搜索内容，优先系统 grep，没有则用 Python 遍历目录，最多返回 100 行。
 - run_shell：执行命令，返回输出或错误，等待超时为 30 秒。
+- web_fetch：读取 HTTP/HTTPS 内容，HTML 会转成纯文本，默认最多返回 50000 字符。
 - write_file：按原教程使用 file_path/content 创建或覆盖 UTF-8 文本文件，自动创建父目录。
 - edit_file：按原教程精确替换唯一匹配的原文，找不到或匹配多处时不写入。
 - execute_tool：通过名称与函数的映射统一分派工具请求。
@@ -47,7 +48,7 @@ python -m venv .venv
 
 程序从 CODEX_HOME（未设置时为用户目录下的 .codex）读取已有 auth.json。请勿把登录令牌或该文件提交到仓库。认证失败时重新使用 codex login 登录。
 
-工具在本机执行；读取到的文件内容会作为后续模型请求的一部分发送给模型服务。当前六种工具均已接入；写入会覆盖已有文件。run_shell 按原文第一版直接执行命令，尚无审批或沙箱，Windows 通常使用 cmd 语法。write_file 与原文一样以当前工作目录解析相对路径，不额外限制为项目目录。
+工具在本机执行；读取到的文件和网页内容会作为后续模型请求的一部分发送给模型服务。当前七种工具均已接入；写入会覆盖已有文件。run_shell 按原文第一版直接执行命令，尚无审批或沙箱，Windows 通常使用 cmd 语法。write_file 与原文一样以当前工作目录解析相对路径，不额外限制为项目目录。
 
 ## 学习参考
 
@@ -60,6 +61,36 @@ write_file 的参数、创建及覆盖行为、行数计算和错误返回与第
 edit_file 当前对应第二章最初的 Python 实现：精确匹配和唯一性检查。尚未添加后文的引号容错、Diff 输出或 mtime 防护。
 
 工具结果截断对应第二章“工具结果截断”：所有已注册工具经过统一入口，短结果原样返回，长结果保留头尾。当前 read_file 仍使用早期教学版的 path 参数，因此分派器中保留了一层参数适配。
+
+web_fetch 对应第二章“WebFetch 工具”。章节展示 TypeScript 代码，本项目使用原仓库 Python 版的标准库 urllib 实现，不需要安装额外依赖。工具只接受 HTTP/HTTPS，等待超时为 30 秒；HTML 会删除 script、style 和标签，网络错误会作为结果返回模型。
+
+## 测试 WebFetch
+
+先在第一个 PowerShell 窗口进入项目目录，启动只供本机访问的临时 HTTP 服务：
+
+```powershell
+.\.venv\Scripts\python.exe -m http.server 8000 --bind 127.0.0.1
+```
+
+保持它运行，再打开第二个 PowerShell 窗口进入项目目录。可以先绕过模型，直接测试工具：
+
+```powershell
+.\.venv\Scripts\python.exe -c "from tools import execute_tool; print(execute_tool('web_fetch', {'url': 'http://127.0.0.1:8000/README.md', 'max_length': 500}))"
+```
+
+看到 README 开头以及截断提示后，再启动完整 Agent：
+
+```powershell
+.\.venv\Scripts\python.exe main.py
+```
+
+输入：
+
+```text
+请使用 web_fetch 读取 http://127.0.0.1:8000/README.md，告诉我这个项目已经实现了哪些工具。
+```
+
+测试结束后，在第一个窗口按 `Ctrl+C` 停止临时 HTTP 服务。
 
 ## 本次工具阅读与实验
 
