@@ -11,12 +11,12 @@ def ask_model(messages):
         "model": MODEL,
         "instructions": (
             "你是一个编程助手，用中文回答。"
-            "不知道文件名时，使用 list_files 查看目录。"
-            "需要了解文件内容时，使用 read_file 工具。"
+            "按文件名查找时使用 list_files，提供 pattern（例如 **/*.py）及可选 path。"
+            "需要了解文件内容时，使用 read_file 工具。需要按内容定位代码时，使用 grep_search 的 pattern 和可选 path。"
             "用户要求保存结果时，使用 write_file，提供 file_path 和完整 content；目标不存在则创建，存在则覆盖。"
             "局部修改使用 edit_file，提供 file_path、精确且唯一的 old_string、new_string。"
             "写入或编辑后根据工具返回结果报告是否成功；失败时不要擅自换路径保存。"
-            "不要编造没有读取过的文件内容。"
+            "需要执行测试或命令时使用 run_shell，提供 command；当前是 Windows，命令使用 cmd 语法。不要编造没有读取过的文件内容。"
             "工具执行失败时，如实解释原因。"
         ),
         "input": messages,

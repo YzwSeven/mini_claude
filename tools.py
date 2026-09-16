@@ -1,5 +1,7 @@
 """工具分两部分：给模型看的说明，以及在本机执行的函数。"""
 import os
+import re
+import subprocess
 from pathlib import Path
 
 # 这份说明通过 tools 字段发给模型，不会自动执行下面的函数。
@@ -22,19 +24,48 @@ TOOL_DEFINITIONS = [
         "strict": True,
     },
     {
-        # 这份说明告诉模型：不知道文件名时，先查看目录再决定读什么。
+        # pattern 匹配文件名；path 可以不传，不传就从工作目录开始找。
         "type": "function",
         "name": "list_files",
-        "description": "列出项目中指定目录下的文件和子目录，不递归。不知道文件名时先用它查看。",
+        "description": "按 glob 模式查找文件，例如 **/*.py，最多返回 200 个路径。",
         "parameters": {
             "type": "object",
             "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "相对项目根目录的目录路径；查看项目根目录时传入 .",
-                }
+                "pattern": {"type": "string", "description": "文件名匹配模式，例如 **/*.py"},
+                "path": {"type": "string", "description": "起始目录，省略时使用当前工作目录"},
             },
-            "required": ["path"],
+            "required": ["pattern"],
+            "additionalProperties": False,
+        },
+        # GPT 协议适配：关闭严格模式，保留原文 path 可省略的含义。
+        "strict": False,
+    },
+    {
+        "type": "function",
+        "name": "grep_search",
+        "description": "用正则表达式搜索文件内容，返回路径、行号和匹配行，最多 100 行。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "pattern": {"type": "string", "description": "搜索内容的正则表达式"},
+                "path": {"type": "string", "description": "搜索目录或文件，省略时使用当前工作目录"},
+            },
+            "required": ["pattern"],
+            "additionalProperties": False,
+        },
+        # 与 list_files 一样，path 保持可选。
+        "strict": False,
+    },
+    {
+        "type": "function",
+        "name": "run_shell",
+        "description": "执行终端命令并返回输出，可用于测试、git 和安装依赖，超时为 30 秒。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string", "description": "要执行的完整命令；Windows 默认使用 cmd 语法"},
+            },
+            "required": ["command"],
             "additionalProperties": False,
         },
         "strict": True,
@@ -92,29 +123,83 @@ def read_file(path):
         return f"读取失败：{error}"
 
 
-def list_files(path):
-    """只列指定目录的直接内容，返回模型可以阅读的文件清单。"""
-    if not isinstance(path, str):
-        return "查看失败：path 必须是字符串。"
+def _list_files(inp: dict) -> str:
+    """按文件名模式找文件；** 可以跨越多层子目录。"""
+    import glob as globmod
+
     try:
-        # 模型传入 . 时，就是查看项目根目录；不依赖终端启动位置。
-        directory = (PROJECT_DIR / path).resolve()
-        if not directory.is_relative_to(PROJECT_DIR):
-            return "查看失败：只能查看当前项目中的目录。"
-        if not directory.is_dir():
-            return "查看失败：目录不存在，或者传入的是一个文件。"
+        # 省略 path 或传空字符串时，以启动程序的工作目录为起点。
+        base = inp.get("path") or "."
+        # glob 找出路径后，只留下文件，并按原文过滤依赖和 Git 路径。
+        hits = [
+            f for f in globmod.glob(os.path.join(base, inp["pattern"]), recursive=True)
+            if os.path.isfile(f) and "node_modules" not in f and "/.git/" not in f
+        ]
+        # 只返回前 200 个，避免把过长清单全塞进模型的上下文。
+        return "\n".join(hits[:200]) if hits else "No files found matching the pattern."
+    except Exception as e:
+        return f"Error listing files: {e}"
 
-        entries = []
-        # 只看一层，不自动钻进 .venv 等子目录，避免一次返回大量文件。
-        for item in sorted(directory.iterdir()):
-            # 类型标签让模型区分：文件可以读，目录可以继续列。
-            kind = "目录" if item.is_dir() else "文件"
-            entries.append(f"[{kind}] {item.name}")
-        return "\n".join(entries) or "这个目录是空的。"
-    except (OSError, ValueError) as error:
-        # 失败也返回文字，Agent 会把原因交回模型，让它决定下一步。
-        return f"查看失败：{error}"
 
+def _grep_search(inp: dict) -> str:
+    # 优先调用系统 grep；系统没有这个程序时，才交给下面的 Python 备用搜索。
+    try:
+        # --line-number 添加行号；-r 递归搜索；-- 后面的内容作为搜索参数。
+        out = subprocess.run(
+            ["grep", "--line-number", "--color=never", "-r", "--", inp["pattern"], inp.get("path") or "."],
+            capture_output=True, text=True, timeout=10,
+        )
+        # grep 用退出码 1 表示没有匹配；0 表示找到了。
+        if out.returncode == 1:
+            return "No matches found."
+        lines = [ln for ln in out.stdout.split("\n") if ln]
+        return "\n".join(lines[:100]) if lines else "No matches found."
+    except FileNotFoundError:
+        return _grep_py(inp["pattern"], inp.get("path") or ".")
+    except Exception as e:
+        return f"Error: {e}"
+
+
+def _grep_py(pattern: str, base: str) -> str:
+    """系统没有 grep 时，用 Python 逐个目录、逐个文件、逐行搜索。"""
+    # 先编译正则；语法不合法时，把原因作为工具结果返回。
+    try:
+        rx = re.compile(pattern)
+    except re.error as e:
+        return f"Error: invalid regex: {e}"
+    matches: list[str] = []
+    # 原文备用版从目录开始遍历；单文件路径不会被 os.walk 遍历。
+    for root, dirs, files in os.walk(base):
+        # 原地修改 dirs，让 os.walk 不再进入隐藏目录及 node_modules。
+        dirs[:] = [d for d in dirs if not d.startswith(".") and d != "node_modules"]
+        for name in files:
+            full = os.path.join(root, name)
+            try:
+                # 行号从 1 开始；返回格式为 文件路径:行号:这一行的内容。
+                for i, line in enumerate(open(full, encoding="utf-8"), 1):
+                    if rx.search(line) and len(matches) < 100:
+                        matches.append(f"{full}:{i}:{line.rstrip()}")
+            except Exception:
+                # 按原文跳过无法读取或无法按 UTF-8 解码的文件。
+                pass
+    return "\n".join(matches) if matches else "No matches found."
+
+
+def _run_shell(inp: dict) -> str:
+    """把命令交给系统执行，再把输出交回 Agent；不是模型自己执行命令。"""
+    try:
+        # shell=True 使用系统命令解释器，Windows 通常是 cmd，不是当前 PowerShell。
+        # capture_output 收集输出，text 将输出解码为文字，timeout 限制等待时间。
+        # 这是原文第一版：直接执行命令，尚无命令审批或沙箱。
+        r = subprocess.run(inp["command"], shell=True, capture_output=True, text=True, timeout=30)
+        # 退出码非 0 表示命令失败，标准输出和错误输出一起返回便于诊断。
+        if r.returncode != 0:
+            return f"Command failed (exit {r.returncode})\nStdout: {r.stdout}\nStderr: {r.stderr}"
+        return r.stdout or "(no output)"
+    except subprocess.TimeoutExpired:
+        return "Command timed out after 30000ms"
+    except Exception as e:
+        return f"Error: {e}"
 
 def _write_file(inp: dict) -> str:
     """按原教程第二章写入完整文件：不存在就创建，存在就覆盖。"""
@@ -169,7 +254,14 @@ def execute_tool(name, arguments):
 
     # 统一入口把不同工具请求交给对应函数，main.py 的循环不需要改。
     if name == "list_files":
-        return list_files(arguments["path"])
+        return _list_files(arguments)
+
+    # 搜索和命令执行也走同一入口，结果由 main.py 原有循环回传。
+    if name == "grep_search":
+        return _grep_search(arguments)
+
+    if name == "run_shell":
+        return _run_shell(arguments)
 
     # 写文件需要两个参数；模型负责生成内容，工具负责实际保存。
     if name == "write_file":
