@@ -54,6 +54,23 @@ TOOL_DEFINITIONS = [
             "additionalProperties": False,
         },
         "strict": True,
+    },
+    {
+        # 参数名称和含义来自原教程；parameters 是现有 GPT 接口的格式适配。
+        "type": "function",
+        "name": "edit_file",
+        "description": "将文件中精确匹配且唯一的 old_string 替换为 new_string。找不到或匹配多处时不修改文件。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "file_path": {"type": "string", "description": "要编辑的文件路径"},
+                "old_string": {"type": "string", "description": "要查找的原文，必须精确匹配且唯一"},
+                "new_string": {"type": "string", "description": "替换后的文字"},
+            },
+            "required": ["file_path", "old_string", "new_string"],
+            "additionalProperties": False,
+        },
+        "strict": True,
     }
 ]
 
@@ -109,7 +126,7 @@ def _write_file(inp: dict) -> str:
         if d and not os.path.exists(d):
             os.makedirs(d, exist_ok=True)
         # w 会覆盖原有内容，所以 content 必须是想保存的完整文件内容。
-        # 局部替换由后续章节中的 edit_file 实现。
+        # 局部替换由本章的 edit_file 实现。
         with open(inp["file_path"], "w", encoding="utf-8") as f:
             f.write(inp["content"])
         # 保留原文按换行符拆分计算行数的方式和返回格式。
@@ -118,6 +135,29 @@ def _write_file(inp: dict) -> str:
     except Exception as e:
         # 将失败原因交回模型，由模型结合结果决定下一步。
         return f"Error writing file: {e}"
+
+
+def _edit_file(inp: dict) -> str:
+    """原教程第二章第一版：先检查精确匹配和唯一性，再替换原文。"""
+    try:
+        # 1. 读取当前文件。相对路径以工作目录为基准，与原文保持一致。
+        content = open(inp["file_path"], encoding="utf-8").read()
+        # 2. 找不到就返回错误，此时还没有写入，不会改变文件内容。
+        if inp["old_string"] not in content:
+            return f"Error: old_string not found in {inp['file_path']}"
+        # 3. 多处匹配时不能猜测要改哪里，让模型补充更完整的上下文。
+        count = content.count(inp["old_string"])
+        if count > 1:
+            return f"Error: old_string found {count} times in {inp['file_path']}. Must be unique."
+        # 4. 先在内存中替换。模型只提供局部改动，其余文字由程序保留。
+        updated = content.replace(inp["old_string"], inp["new_string"])
+        # 5. 将修改后的完整内容写回原文件，而不是追加到文件末尾。
+        with open(inp["file_path"], "w", encoding="utf-8") as f:
+            f.write(updated)
+        return f"Successfully edited {inp['file_path']}"
+    except Exception as e:
+        # 6. 把错误作为工具结果交回模型，让它决定如何处理失败。
+        return f"Error editing file: {e}"
 
 
 def execute_tool(name, arguments):
@@ -134,6 +174,10 @@ def execute_tool(name, arguments):
     # 写文件需要两个参数；模型负责生成内容，工具负责实际保存。
     if name == "write_file":
         return _write_file(arguments)
+
+    # 参数字典直接交给编辑工具，Agent 循环仍不需要知道替换细节。
+    if name == "edit_file":
+        return _edit_file(arguments)
 
     # 以后新增工具时，在这里添加分支，并在 TOOL_DEFINITIONS 中添加说明。
     # main.py 的循环就不用跟着每个新工具改动了。
