@@ -1,4 +1,5 @@
 """工具分两部分：给模型看的说明，以及在本机执行的函数。"""
+import json
 import os
 import re
 import subprocess
@@ -122,8 +123,55 @@ TOOL_DEFINITIONS = [
             "additionalProperties": False,
         },
         "strict": True,
+    },
+    {
+        # ToolSearch 本身始终可见，用来按名称或描述激活延迟工具。
+        "type": "function",
+        "name": "tool_search",
+        "description": "按名称或关键词搜索延迟工具，并返回匹配工具的完整定义。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "工具名称或搜索关键词"},
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+        "strict": True,
     }
 ]
+
+
+# 集合只保存已经激活的延迟工具名称；重复激活不会产生重复记录。
+_activated_tools: set[str] = set()
+
+
+def reset_activated_tools() -> None:
+    """清空激活记录，主要供新会话初始化和测试使用。"""
+    _activated_tools.clear()
+
+
+def get_active_tool_definitions(all_tools=None) -> list[dict]:
+    """返回本次要发送给模型的工具定义，并移除本地 deferred 标记。"""
+    tools = all_tools if all_tools is not None else TOOL_DEFINITIONS
+    return [
+        # 创建发送副本；deferred 是本地管理字段，不能传给模型接口。
+        {key: value for key, value in tool.items() if key != "deferred"}
+        for tool in tools
+        # 普通工具直接发送；延迟工具只有激活后才发送完整定义。
+        if not tool.get("deferred") or tool["name"] in _activated_tools
+    ]
+
+
+def get_deferred_tool_names(all_tools=None) -> list[str]:
+    """返回尚未激活的延迟工具名称，供提示词告诉模型可以搜索什么。"""
+    tools = all_tools if all_tools is not None else TOOL_DEFINITIONS
+    return [
+        tool["name"]
+        for tool in tools
+        if tool.get("deferred") and tool["name"] not in _activated_tools
+    ]
+
 
 def _read_file(inp: dict) -> str:
     """按原教程读取文件，并给每一行加上便于模型定位的行号。"""
@@ -354,6 +402,37 @@ def execute_tool(name, arguments, read_file_state=None):
             if os.path.getmtime(abs_path) != read_file_state[abs_path]:
                 verb = "writing" if name == "write_file" else "editing"
                 return f"Warning: {arguments['file_path']} was modified externally since your last read. Please read_file again before {verb}."
+
+    # ToolSearch 只搜索已经注册且带 deferred=True 的工具，不安装或执行工具。
+    if name == "tool_search":
+        query = (arguments.get("query") or "").lower()
+        deferred_tools = [tool for tool in TOOL_DEFINITIONS if tool.get("deferred")]
+        matches = [
+            tool
+            for tool in deferred_tools
+            if query in tool["name"].lower()
+            or query in (tool.get("description") or "").lower()
+        ]
+        if not matches:
+            return "No matching deferred tools found."
+
+        # 激活只记录名称；工具实现和完整定义从一开始就在本地注册表中。
+        for tool in matches:
+            _activated_tools.add(tool["name"])
+
+        # 返回给 GPT 的字段使用 parameters；原文 Anthropic 版本使用 input_schema。
+        return json.dumps(
+            [
+                {
+                    "name": tool["name"],
+                    "description": tool.get("description", ""),
+                    "parameters": tool["parameters"],
+                }
+                for tool in matches
+            ],
+            ensure_ascii=False,
+            indent=2,
+        )
 
     # 字典表达“工具名称对应哪个 Python 函数”，新增工具时只需增加一项。
     handlers = {
