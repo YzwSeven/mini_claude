@@ -32,8 +32,8 @@ def read_login():
     return token, account
 
 
-def send_request(payload):
-    """发送一轮请求，等完整响应到齐后返回字典（包含 output 列表）。"""
+def send_request(payload, on_text=None):
+    """文字片段到达时调用 on_text；完整响应到齐后仍返回包含 output 的字典。"""
     token, account = read_login()
     request = urllib.request.Request(
         ENDPOINT,
@@ -71,7 +71,13 @@ def send_request(payload):
                     # 不能只提取文字，否则模型只请求工具时就会返回空串。
                     # 也不能把这个判断套在 output_text.delta 的判断里面：
                     # 同一个事件不可能同时是“文字片段”和“响应完成”。
-                    if kind == "response.output_item.done":
+                    if kind == "response.output_text.delta":
+                        # 这里只通知显示层，不把片段另存成历史消息。
+                        # 输出序号用于区分同一轮里的多条消息，避免重复打印。
+                        text = event.get("delta", "")
+                        if text and on_text is not None:
+                            on_text(text, event["output_index"])
+                    elif kind == "response.output_item.done":
                         finished_items[event["output_index"]] = event["item"]
                     elif kind == "response.completed":
                         result = event["response"]
@@ -82,7 +88,7 @@ def send_request(payload):
                         return result
                     elif kind in ("error", "response.failed", "response.incomplete"):
                         raise RuntimeError(f"模型请求未完成：{kind}")
-                    # 其他中间事件暂时忽略；这个教学版等完整回答后才显示。
+                    # 工具参数的中间片段仍不执行；等完整工具请求到齐后交给 Agent。
     except urllib.error.HTTPError as exc:
         detail = exc.read(4096).decode("utf-8", errors="replace")
         # 即便服务端错误意外包含认证信息，也不把它显示出来。

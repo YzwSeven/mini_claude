@@ -13,7 +13,22 @@ def run_agent(messages, read_file_state):
     # 这就是 Agent 的内层循环。限制次数，防止模型一直要求调用工具。
     for step in range(10):
         print(f"正在思考……第 {step + 1} 次调用", flush=True)
-        response = ask_model(messages)
+        # 记录哪些输出已实时显示，最后只补打没有文字片段的消息。
+        streamed_items = set()
+
+        def show_text(text, output_index):
+            """每收到一块文字就显示；回调由网络层调用。"""
+            if not streamed_items:
+                print("助手：", end="", flush=True)
+            streamed_items.add(output_index)
+            print(text, end="", flush=True)
+
+        try:
+            response = ask_model(messages, on_text=show_text)
+        finally:
+            # 完成、网络失败或用户中断时都结束当前文字行。
+            if streamed_items:
+                print(flush=True)
         output = response["output"]
 
         # 保存模型完整输出：既有说给用户的文字，也可能有工具调用。
@@ -22,12 +37,14 @@ def run_agent(messages, read_file_state):
         tool_calls = []
         has_text = False
 
-        for item in output:
+        for output_index, item in enumerate(output):
             if item["type"] == "message":
                 # 一条消息可以包含多个内容块；这里只显示回答文字。
                 for content in item.get("content", []):
                     if content["type"] == "output_text" and content["text"]:
-                        print("助手：", content["text"])
+                        # 有些响应只提供最终文字，此时仍需正常打印。
+                        if output_index not in streamed_items:
+                            print("助手：", content["text"])
                         has_text = True
             elif item["type"] == "function_call":
                 # 模型说“我要用这个工具”。现在还没执行，先收集起来。

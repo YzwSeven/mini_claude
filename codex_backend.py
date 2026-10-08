@@ -6,7 +6,7 @@ from tools import get_active_tool_definitions, get_deferred_tool_names
 MODEL = "gpt-5.5"
 
 
-def ask_model(messages):
+def ask_model(messages, on_text=None):
     # 延迟工具只把名称写进提示词；完整定义要等 ToolSearch 激活后再发送。
     deferred_names = get_deferred_tool_names()
     deferred_instruction = ""
@@ -37,4 +37,5 @@ def ask_model(messages):
         "reasoning": {"effort": "low"},
     }
     # 返回完整响应字典，而不是一个字符串，避免丢掉工具调用。
-    return send_request(payload)
+    # 回调只负责实时显示文字，返回值仍然是模型完整响应。
+    return send_request(payload, on_text=on_text)
