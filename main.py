@@ -1,8 +1,10 @@
 """先读这个文件：用户提任务 → 模型决定 → 执行工具 → 模型继续回答。"""
 import json
+import sys
 
 from codex_backend import ask_model
 from prompt import build_user_context_reminder
+from session import load_session, save_session
 from tools import execute_tool
 
 
@@ -62,25 +64,45 @@ def run_agent(messages, read_file_state):
     raise RuntimeError("当前任务已达到 10 次模型调用上限，已暂停。")
 
 
-def main():
-    # 这份历史在程序运行期间保留；退出后不会自动保存到硬盘。
+def main(argv=None):
+    # sys.argv[0] 是脚本名称；后面才是用户传入的参数。
+    if argv is None:
+        argv = sys.argv[1:]
+    resume = "--resume" in argv
+    argv = [argument for argument in argv if argument != "--resume"]
+    # 默认开始新会话；只有显式传入 --resume 才读取磁盘上的历史。
     messages = []
+    if resume:
+        saved = load_session()
+        if saved:
+            messages = saved
+            print(f"已恢复 {len(messages)} 条历史记录。")
     # 记录这个 Agent 读过哪些文件，以及读取时的修改时间。
     # 它放在外层循环外，所以一次读取可供同一对话后续的编辑检查使用。
     read_file_state = {}
+    # 恢复聊天历史不恢复文件读取权限；重启后编辑已有文件仍需重新读取。
     # 启动会话时读取一次项目规则和日期，后续通过消息历史保留。
     user_context_reminder = build_user_context_reminder()
-    print("Mini Claude 已启动，输入 exit 退出。")
+    # 剩余参数组成一次提问；没有提问参数时进入交互式聊天。
+    one_shot = " ".join(argv).strip()
+    print("Mini Claude 已启动，输入 exit 退出，输入 /clear 清空会话。")
 
     # 外层循环等用户的新任务；run_agent 内层循环处理同一个任务。
     while True:
         try:
-            user_input = input("你：").strip()
+            user_input = one_shot if one_shot else input("你：").strip()
         except (EOFError, KeyboardInterrupt):
             print("\n再见！")
             break
-        if user_input == "exit":
+        if not one_shot and user_input in ("exit", "quit"):
             break
+        if not one_shot and user_input == "/clear":
+            # 对话和读取状态一起清空；下一次提问会重新携带项目背景。
+            messages = []
+            read_file_state = {}
+            save_session(messages)
+            print("会话历史已清空。")
+            continue
         if not user_input:
             continue
 
@@ -105,6 +127,11 @@ def main():
         else:
             messages = turn_messages
             read_file_state = turn_read_file_state
+            # 只保存完整成功的一轮，失败的半截工具调用不会覆盖磁盘历史。
+            save_session(messages)
+        if one_shot:
+            # 单次模式执行完一个任务即退出；失败后也不重复执行同一输入。
+            break
 
 
 if __name__ == "__main__":

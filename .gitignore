@@ -17,6 +17,9 @@ __pycache__/
 auth.json
 .codex/
 
+# 本地聊天历史包含用户消息和工具输出，不提交到仓库。
+.mini-session.json
+
 # 测试、检查工具的缓存和覆盖率文件
 .pytest_cache/
 .mypy_cache/
