@@ -70,7 +70,9 @@ web_fetch 对应第二章“WebFetch 工具”。章节展示 TypeScript 代码�
 
 ToolSearch 对应第二章“ToolSearch 延迟加载”。普通工具始终发送完整定义；带 deferred 标记的工具在激活前只通过提示词公开名称。tool_search 匹配名称或描述并记录激活状态，下一次请求才发送完整定义，同时从发送副本中删除本地 deferred 字段。当前章节尚无真正的延迟工具；第十章实现 Plan Mode 后才会把计划工具标记为 deferred。
 
-System Prompt 对应第三章的第一步。`prompt.py` 把不会随会话改变的身份、行为规则和工具偏好放在静态核心中，再在运行时追加当前目录、操作系统、Shell 和 Git 分支。`codex_backend.py` 调用 `build_system_prompt()`，并把结果映射到 GPT/Codex Responses 请求的 `instructions` 字段。
+System Prompt 对应第三章。`prompt.py` 把不会随会话改变的身份、行为规则和工具偏好放在静态核心中，再在运行时追加当前目录、操作系统、Shell 和 Git 分支。`codex_backend.py` 调用 `build_system_prompt()`，并把结果映射到 GPT/Codex Responses 请求的 `instructions` 字段。
+
+项目规则读取器会从当前目录向上查找 `CLAUDE.md`，解析其中单独成行的 `@./路径`、`@~/路径` 和 `@/绝对路径` 引用，并加载当前目录下按文件名排序的 `.claude/rules/*.md`。引用最多递归 5 层，并使用已访问路径集合阻止循环引用。会话启动时，`build_user_context_reminder()` 将项目规则和日期包装为 `<system-reminder>`，由 `main.py` 拼到首条用户消息前面；后续通过历史保留，不重复添加。规则更新后重新启动程序即可加载。
 
 ## 测试 WebFetch
 

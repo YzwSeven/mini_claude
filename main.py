@@ -2,6 +2,7 @@
 import json
 
 from codex_backend import ask_model
+from prompt import build_user_context_reminder
 from tools import execute_tool
 
 
@@ -67,6 +68,8 @@ def main():
     # 记录这个 Agent 读过哪些文件，以及读取时的修改时间。
     # 它放在外层循环外，所以一次读取可供同一对话后续的编辑检查使用。
     read_file_state = {}
+    # 启动会话时读取一次项目规则和日期，后续通过消息历史保留。
+    user_context_reminder = build_user_context_reminder()
     print("Mini Claude 已启动，输入 exit 退出。")
 
     # 外层循环等用户的新任务；run_agent 内层循环处理同一个任务。
@@ -86,7 +89,13 @@ def main():
         turn_messages = messages.copy()
         # 与对话历史一起使用副本；本轮失败时，不保留没有对应历史的读取记录。
         turn_read_file_state = read_file_state.copy()
-        turn_messages.append({"role": "user", "content": user_input})
+        # 只在首条用户消息前加入背景；后续请求会携带已有历史，无需重复。
+        # 使用本轮历史副本判断：如果首轮失败，下次尝试仍会正确加入背景。
+        is_first_user = not any(message.get("role") == "user" for message in turn_messages)
+        content = user_input
+        if is_first_user and user_context_reminder:
+            content = f"{user_context_reminder}\n\n{user_input}"
+        turn_messages.append({"role": "user", "content": content})
         try:
             run_agent(turn_messages, turn_read_file_state)
         except KeyboardInterrupt:
