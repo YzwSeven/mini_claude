@@ -58,7 +58,7 @@ python -m venv .venv
 
 ## 当前与原教程的对应关系
 
-write_file 的参数、创建及覆盖行为、行数计算和错误返回与第二章 Python 教学代码一致。工具定义为适配现有 GPT 接口，使用 parameters（原文 Anthropic 使用 input_schema）。read_file 已改用原文的 file_path 参数并返回行号。list_files、grep_search、run_shell 已按第二章最初的 Python 实现补齐。list_files 和 grep_search 显式关闭 strict，保留原文 path 可选的含义。
+write_file 的参数、创建及覆盖行为、行数计算和错误返回与第二章 Python 教学代码一致。工具定义为适配现有 GPT 接口，使用 parameters。read_file 已改用原文的 file_path 参数并返回行号。list_files、grep_search、run_shell 已按第二章最初的 Python 实现补齐。list_files 和 grep_search 显式关闭 strict，保留原文 path 可选的含义。
 
 edit_file 当前对应第二章最初的精确匹配和唯一性检查，并已接入本节的 Read-before-edit 与 mtime 防护。后续的引号容错和 Diff 输出尚未添加。
 
@@ -115,3 +115,12 @@ System Prompt 对应第三章。`prompt.py` 把不会随会话改变的身份、
 ```
 
 原文备用搜索使用 os.walk，只支持遍历目录；没有系统 grep 时，请给 path 传目录。glob 是匹配文件名，正则是匹配文件内容，两者语法不同。新工具相对路径基于当前工作目录，请从项目根目录启动。
+
+
+## GPT 接入与思考强度
+
+当前只接入 GPT，不提供其他模型服务接入。`MINI_BACKEND` 支持 `codex`（默认，现有登录路径）和 `openai`（官方 API，需要 OPENAI_API_KEY 和 MINI_MODEL）。默认 Codex 模型为 gpt-5.5。
+
+启动：`python main.py`；加强思考：`python main.py --thinking`。普通 GPT-5.5 使用 low/high 两档。Codex 发送 reasoning.effort，官方 Chat Completions 发送 reasoning_effort。模型调用与工具执行保持原有循环。
+
+详细修改见 [007：仅保留 GPT 接入](docs/007-2026-10-14-05-gpt-only.md)。docs 历史记录保留教学过程，当前能力以本节及最新记录为准。

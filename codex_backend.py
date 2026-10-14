@@ -1,20 +1,21 @@
 """第二个读这里：模型用哪个、收到什么指令、能请求哪些工具。"""
 from codex_transport import send_request
 import os
-from api_backends import call_anthropic, call_openai
+from api_backends import call_openai
 from retry import with_retry
+from thinking import get_gpt_reasoning_effort
 from prompt import build_system_prompt
 from tools import get_active_tool_definitions, get_deferred_tool_names
 
 MODEL = "gpt-5.5"
 
 
-def ask_model(messages, on_text=None):
+def ask_model(messages, on_text=None, thinking=False):
     """重试当前模型请求；工具执行仍由 main.py 在完整回复之后处理。"""
-    return with_retry(lambda: _ask_model_once(messages, on_text))
+    return with_retry(lambda: _ask_model_once(messages, on_text, thinking))
 
 
-def _ask_model_once(messages, on_text=None):
+def _ask_model_once(messages, on_text=None, thinking=False):
     # 延迟工具只把名称写进提示词；完整定义要等 ToolSearch 激活后再发送。
     deferred_names = get_deferred_tool_names()
     deferred_instruction = ""
@@ -30,19 +31,19 @@ def _ask_model_once(messages, on_text=None):
     if deferred_instruction:
         instructions += f"\n\n{deferred_instruction}"
 
-    # 原教程两种 API 之外，保留已经选定的 Codex 接入作为默认路径。
+    # 只接入 GPT：默认 Codex，也可显式选择官方 OpenAI API。
     # 显式选择可以避免环境中遗留的密钥意外改变正在使用的服务。
     backend = os.environ.get("MINI_BACKEND", "codex").lower()
     model = os.environ.get("MINI_MODEL") or (MODEL if backend == "codex" else "")
-    if backend not in ("codex", "openai", "anthropic"):
-        raise RuntimeError("MINI_BACKEND 只能是 codex、openai 或 anthropic。")
+    if backend not in ("codex", "openai"):
+        raise RuntimeError("MINI_BACKEND 只能是 codex 或 openai。")
     if not model:
         raise RuntimeError("切换到 API 后端时，请设置 MINI_MODEL 为该服务可用的模型名称。")
     if backend == "openai":
+        # 官方 Chat Completions 使用 reasoning_effort，字段转换在 api_backends.py。
+        if thinking:
+            return call_openai(messages, instructions, get_active_tool_definitions(), model, on_text, thinking=True)
         return call_openai(messages, instructions, get_active_tool_definitions(), model, on_text)
-    if backend == "anthropic":
-        return call_anthropic(messages, instructions, get_active_tool_definitions(), model, on_text)
-
     # 这是发给模型的任务单。messages 中包含用户消息和之前的工具结果。
     payload = {
         "model": model,
@@ -55,7 +56,9 @@ def _ask_model_once(messages, on_text=None):
         # 我们自己传历史，所以一并保留可续接的加密推理记录。
         # 不需要解密；main.py 会把它随完整输出一起传回去。
         "include": ["reasoning.encrypted_content"],
-        "reasoning": {"effort": "low"},
+        # Codex 使用 Responses 风格的嵌套字典配置 GPT 思考强度。
+        # True → high；False → low，保留原来默认的低强度。
+        "reasoning": {"effort": get_gpt_reasoning_effort(thinking)},
     }
     # 返回完整响应字典，而不是一个字符串，避免丢掉工具调用。
     # 回调只负责实时显示文字，返回值仍然是模型完整响应。

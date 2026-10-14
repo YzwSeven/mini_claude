@@ -1,3 +1,2 @@
-# 第五章双后端官方 SDK；默认 Codex 路径仍只依赖标准库。
+# 官方 OpenAI API 使用 SDK；默认 Codex 路径只依赖标准库。
 openai>=1.0,<3
-anthropic>=0.40,<1

@@ -1,7 +1,8 @@
-"""第五章：把两种官方 API 协议转换成 Agent 已有的统一消息格式。"""
+"""第五章：把官方 OpenAI API 转换成 Agent 已有的统一消息格式。"""
 import json
 import os
 from retry import ModelRequestError
+from thinking import get_gpt_reasoning_effort, is_gpt_55
 
 
 def _text(item):
@@ -34,36 +35,11 @@ def to_chat_messages(messages, instructions):
     return result
 
 
-def to_anthropic_messages(messages):
-    """Anthropic 将工具请求放在助手内容块，工具结果放在用户内容块。"""
-    result = []
-    for item in messages:
-        kind = item.get("type")
-        if kind == "reasoning":
-            continue
-        if kind == "function_call":
-            role = "assistant"
-            block = {"type": "tool_use", "id": item["call_id"], "name": item["name"], "input": json.loads(item["arguments"])}
-        elif kind == "function_call_output":
-            role = "user"
-            block = {"type": "tool_result", "tool_use_id": item["call_id"], "content": item["output"]}
-        elif item.get("role") in ("user", "assistant"):
-            role = item["role"]
-            block = {"type": "text", "text": _text(item)}
-        else:
-            continue
-        # 同一轮多个工具请求或结果合并，保持 Anthropic 的消息交替结构。
-        if not result or result[-1]["role"] != role:
-            result.append({"role": role, "content": []})
-        result[-1]["content"].append(block)
-    return result
-
-
 def _message(text):
     return {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]}
 
 
-def call_openai(messages, instructions, tools, model, on_text=None):
+def call_openai(messages, instructions, tools, model, on_text=None, thinking=False):
     """累积 Chat Completions 的文字和工具参数分片，再返回统一输出。"""
     try:
         from openai import OpenAI, APIError
@@ -76,6 +52,17 @@ def call_openai(messages, instructions, tools, model, on_text=None):
     if os.environ.get("OPENAI_BASE_URL"):
         options["base_url"] = os.environ["OPENAI_BASE_URL"]
     definitions = [{"type": "function", "function": {k: v for k, v in tool.items() if k != "type"}} for tool in tools]
+    # 本次按官方文档核对 GPT-5.5，其他兼容模型保留原请求格式。
+    if is_gpt_55(model):
+        generation_options = {
+            "reasoning_effort": get_gpt_reasoning_effort(thinking),
+            # 这个上限包含推理和回答 token，不是独立的“思考预算”。
+            "max_completion_tokens": 16384,
+        }
+    else:
+        if thinking:
+            raise RuntimeError("本次 GPT 思考开关适配的是 gpt-5.5；请使用该模型或先核对目标模型参数。")
+        generation_options = {"max_tokens": 16384}
     text = ""
     calls = {}
     finish_reason = None
@@ -83,7 +70,9 @@ def call_openai(messages, instructions, tools, model, on_text=None):
         with OpenAI(**options) as client:
             with client.chat.completions.create(
                 model=model, messages=to_chat_messages(messages, instructions),
-                tools=definitions, stream=True, max_tokens=16384,
+                tools=definitions, stream=True,
+                # ** 将字典展开成 SDK 参数：reasoning_effort=... 等。
+                **generation_options,
                 stream_options={"include_usage": True},
             ) as stream:
                 for chunk in stream:
@@ -116,37 +105,4 @@ def call_openai(messages, instructions, tools, model, on_text=None):
             raise RuntimeError("OpenAI 工具调用缺少编号或名称。")
         json.loads(call["arguments"])
         output.append({"type": "function_call", "call_id": call["id"], "name": call["name"], "arguments": call["arguments"]})
-    return {"output": output}
-
-
-def call_anthropic(messages, instructions, tools, model, on_text=None):
-    """SDK 累积 Anthropic 内容块；文字事件仍立即通知显示层。"""
-    try:
-        from anthropic import Anthropic, APIError
-    except ImportError:
-        raise RuntimeError("请先运行 .\\.venv\\Scripts\\python.exe -m pip install -r requirements.txt") from None
-    key = os.environ.get("ANTHROPIC_API_KEY")
-    if not key:
-        raise RuntimeError("anthropic 后端需要设置 ANTHROPIC_API_KEY。")
-    options = {"api_key": key, "max_retries": 0, "timeout": 90}
-    if os.environ.get("ANTHROPIC_BASE_URL"):
-        options["base_url"] = os.environ["ANTHROPIC_BASE_URL"]
-    definitions = [{"name": tool["name"], "description": tool.get("description", ""), "input_schema": tool["parameters"]} for tool in tools]
-    try:
-        with Anthropic(**options) as client:
-            with client.messages.stream(model=model, max_tokens=16384, system=instructions, messages=to_anthropic_messages(messages), tools=definitions) as stream:
-                for event in stream:
-                    if event.type == "content_block_delta" and event.delta.type == "text_delta" and on_text:
-                        on_text(event.delta.text, event.index)
-                reply = stream.get_final_message()
-    except APIError as error:
-        raise ModelRequestError(f"Anthropic 请求失败：{type(error).__name__}", error) from None
-    if reply.stop_reason not in ("end_turn", "tool_use", "stop_sequence"):
-        raise RuntimeError(f"Anthropic 响应未完整结束：{reply.stop_reason}")
-    output = []
-    for block in reply.content:
-        if block.type == "text":
-            output.append(_message(block.text))
-        elif block.type == "tool_use":
-            output.append({"type": "function_call", "call_id": block.id, "name": block.name, "arguments": json.dumps(block.input, ensure_ascii=False)})
     return {"output": output}

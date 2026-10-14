@@ -420,7 +420,7 @@ def execute_tool(name, arguments, read_file_state=None):
         for tool in matches:
             _activated_tools.add(tool["name"])
 
-        # 返回给 GPT 的字段使用 parameters；原文 Anthropic 版本使用 input_schema。
+        # 返回给 GPT 的工具参数定义使用 parameters 字段。
         return json.dumps(
             [
                 {

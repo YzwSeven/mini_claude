@@ -8,7 +8,7 @@ from session import load_session, save_session
 from tools import execute_tool
 
 
-def run_agent(messages, read_file_state):
+def run_agent(messages, read_file_state, thinking=False):
     """完成一个用户任务。一次任务可能需要多次请求模型。"""
     # 这就是 Agent 的内层循环。限制次数，防止模型一直要求调用工具。
     for step in range(10):
@@ -24,7 +24,11 @@ def run_agent(messages, read_file_state):
             print(text, end="", flush=True)
 
         try:
-            response = ask_model(messages, on_text=show_text)
+            # 开关随每次请求传递；没有开启时沿用原来的调用形式。
+            if thinking:
+                response = ask_model(messages, on_text=show_text, thinking=True)
+            else:
+                response = ask_model(messages, on_text=show_text)
         finally:
             # 完成、网络失败或用户中断时都结束当前文字行。
             if streamed_items:
@@ -85,6 +89,11 @@ def main(argv=None):
     # sys.argv[0] 是脚本名称；后面才是用户传入的参数。
     if argv is None:
         argv = sys.argv[1:]
+    # --thinking 是启动选项，取出后不能混进用户的提问文字。
+    thinking = "--thinking" in argv
+    argv = [argument for argument in argv if argument != "--thinking"]
+    if thinking:
+        print("已开启加强思考：GPT 使用 high 强度。")
     resume = "--resume" in argv
     argv = [argument for argument in argv if argument != "--resume"]
     # 默认开始新会话；只有显式传入 --resume 才读取磁盘上的历史。
@@ -136,7 +145,10 @@ def main(argv=None):
             content = f"{user_context_reminder}\n\n{user_input}"
         turn_messages.append({"role": "user", "content": content})
         try:
-            run_agent(turn_messages, turn_read_file_state)
+            if thinking:
+                run_agent(turn_messages, turn_read_file_state, thinking=True)
+            else:
+                run_agent(turn_messages, turn_read_file_state)
         except KeyboardInterrupt:
             print("\n已中断本轮，可以输入新任务。")
         except (RuntimeError, OSError, ValueError, KeyError, TypeError) as error:
