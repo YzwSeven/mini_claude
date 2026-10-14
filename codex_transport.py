@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import urllib.error
 import urllib.request
+from retry import ModelRequestError
 
 ENDPOINT = "https://chatgpt.com/backend-api/codex/responses"
 
@@ -90,12 +91,13 @@ def send_request(payload, on_text=None):
                         raise RuntimeError(f"模型请求未完成：{kind}")
                     # 工具参数的中间片段仍不执行；等完整工具请求到齐后交给 Agent。
     except urllib.error.HTTPError as exc:
+        exc.status_code = exc.code
         detail = exc.read(4096).decode("utf-8", errors="replace")
         # 即便服务端错误意外包含认证信息，也不把它显示出来。
         detail = detail.replace(token, "[REDACTED]").replace(account, "[REDACTED]")
         if exc.code == 401:
             raise RuntimeError("登录已过期或被拒绝，请运行 codex login 后重试。") from None
-        raise RuntimeError(f"HTTP {exc.code}: {detail}") from None
+        raise ModelRequestError(f"HTTP {exc.code}: {detail}", exc) from None
     except urllib.error.URLError as exc:
-        raise RuntimeError(f"网络请求失败：{exc.reason}") from None
+        raise ModelRequestError(f"网络请求失败：{exc.reason}", exc) from None
     raise RuntimeError("连接在完整响应到达前结束，请重试。")

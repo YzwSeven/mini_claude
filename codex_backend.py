@@ -2,6 +2,7 @@
 from codex_transport import send_request
 import os
 from api_backends import call_anthropic, call_openai
+from retry import with_retry
 from prompt import build_system_prompt
 from tools import get_active_tool_definitions, get_deferred_tool_names
 
@@ -9,6 +10,11 @@ MODEL = "gpt-5.5"
 
 
 def ask_model(messages, on_text=None):
+    """重试当前模型请求；工具执行仍由 main.py 在完整回复之后处理。"""
+    return with_retry(lambda: _ask_model_once(messages, on_text))
+
+
+def _ask_model_once(messages, on_text=None):
     # 延迟工具只把名称写进提示词；完整定义要等 ToolSearch 激活后再发送。
     deferred_names = get_deferred_tool_names()
     deferred_instruction = ""

@@ -1,6 +1,7 @@
 """第五章：把两种官方 API 协议转换成 Agent 已有的统一消息格式。"""
 import json
 import os
+from retry import ModelRequestError
 
 
 def _text(item):
@@ -105,7 +106,7 @@ def call_openai(messages, instructions, tools, model, on_text=None):
                         finish_reason = choice.finish_reason
     except APIError as error:
         # 不显示 SDK 原始响应，避免错误内容包含密钥。
-        raise RuntimeError(f"OpenAI 请求失败：{type(error).__name__}") from None
+        raise ModelRequestError(f"OpenAI 请求失败：{type(error).__name__}", error) from None
     if finish_reason not in ("stop", "tool_calls"):
         raise RuntimeError(f"OpenAI 响应未完整结束：{finish_reason}")
     output = [_message(text)] if text else []
@@ -139,7 +140,7 @@ def call_anthropic(messages, instructions, tools, model, on_text=None):
                         on_text(event.delta.text, event.index)
                 reply = stream.get_final_message()
     except APIError as error:
-        raise RuntimeError(f"Anthropic 请求失败：{type(error).__name__}") from None
+        raise ModelRequestError(f"Anthropic 请求失败：{type(error).__name__}", error) from None
     if reply.stop_reason not in ("end_turn", "tool_use", "stop_sequence"):
         raise RuntimeError(f"Anthropic 响应未完整结束：{reply.stop_reason}")
     output = []
