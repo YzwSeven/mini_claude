@@ -27,3 +27,5 @@
 - [009：流式工具流程的人话注释](009-2026-10-14-05-streaming-tools-comments.md)
 
 - [010：按原文纠正提前任务处理](010-2026-10-15-05-align-early-tools.md)
+
+- [011：OpenAI Chat 分批并行工具执行](011-2026-10-15-05-parallel-tools.md)

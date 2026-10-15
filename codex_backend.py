@@ -56,8 +56,12 @@ def _ask_model_once(messages, on_text=None, thinking=False, on_tool_call=None):
     if backend == "openai":
         # 官方 Chat Completions 使用 reasoning_effort，字段转换在 api_backends.py。
         if thinking:
-            return call_openai(messages, instructions, get_active_tool_definitions(), model, on_text, thinking=True)
-        return call_openai(messages, instructions, get_active_tool_definitions(), model, on_text)
+            response = call_openai(messages, instructions, get_active_tool_definitions(), model, on_text, thinking=True)
+        else:
+            response = call_openai(messages, instructions, get_active_tool_definitions(), model, on_text)
+        # 这是给本地 Agent 看的标记，不发送给模型，也不放进消息历史。
+        # Chat 路径等完整回复后分批执行；Codex 继续使用已有提前任务。
+        return {**response, "tool_execution_mode": "batch"}
     # 这是发给模型的任务单。messages 中包含用户消息和之前的工具结果。
     payload = {
         "model": model,

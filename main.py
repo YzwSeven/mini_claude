@@ -7,6 +7,7 @@ from prompt import build_user_context_reminder
 from session import load_session, save_session
 from tools import execute_tool
 from early_tools import EarlyTools
+from batch_tools import execute_tool_batches
 
 
 def run_agent(messages, read_file_state, thinking=False):
@@ -80,6 +81,21 @@ def run_agent(messages, read_file_state, thinking=False):
                     raise RuntimeError("模型没有返回文字或工具请求，请重试。")
                 return
 
+            if response.get("tool_execution_mode") == "batch":
+                # 仅官方 OpenAI Chat 路径走这里：完整回复后连续只读工具分一批。
+                # execute_tool_batches 等一批完成再开始下一批，不清空提前结果。
+                for call, result in execute_tool_batches(tool_calls, execute_tool, read_file_state):
+                    print("工具结果：", result)
+                    messages.append({
+                        "type": "function_call_output",
+                        "call_id": call["call_id"],
+                        "output": result,
+                    })
+                # 本轮工具结果已全部放入历史，直接进入下一次模型请求。
+                # 不再进入下面的 Codex 循环，否则相同工具会重复执行。
+                continue
+
+            # Codex 路径保持原文的提前任务复用，不加写前清空或分批等待。
             for call in tool_calls:
                 print("调用工具：", call["name"], call["arguments"])
                 try:
