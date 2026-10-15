@@ -124,3 +124,5 @@ System Prompt 对应第三章。`prompt.py` 把不会随会话改变的身份、
 启动：`python main.py`；加强思考：`python main.py --thinking`。普通 GPT-5.5 使用 low/high 两档。Codex 发送 reasoning.effort，官方 Chat Completions 发送 reasoning_effort。模型调用与工具执行保持原有循环。
 
 详细修改见 [007：仅保留 GPT 接入](docs/007-2026-10-14-05-gpt-only.md)。docs 历史记录保留教学过程，当前能力以本节及最新记录为准。
+
+默认 Codex 路径支持完整只读工具请求到达后的提前执行，最终复用结果；官方 OpenAI Chat 路径仍等待整轮结束。详见 [008 教学说明](docs/008-2026-10-14-05-streaming-tools.md)。

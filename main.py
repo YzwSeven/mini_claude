@@ -6,82 +6,100 @@ from codex_backend import ask_model
 from prompt import build_user_context_reminder
 from session import load_session, save_session
 from tools import execute_tool
+from early_tools import EarlyTools
 
 
 def run_agent(messages, read_file_state, thinking=False):
-    """完成一个用户任务。一次任务可能需要多次请求模型。"""
-    # 这就是 Agent 的内层循环。限制次数，防止模型一直要求调用工具。
+    """处理一个任务；只读工具可在 GPT 的流式窗口内提前执行。"""
+    # 每次循环是一次模型请求，不是一条用户输入。
+    # 如果 GPT 要用工具，执行并回传后还会继续循环；最多请求十次。
     for step in range(10):
         print(f"正在思考……第 {step + 1} 次调用", flush=True)
-        # 记录哪些输出已实时显示，最后只补打没有文字片段的消息。
+        # 记录本次尝试中已经流式显示过的输出编号，最终回复不再重复打印。
         streamed_items = set()
+        # 每一轮都有独立的任务管理器；异常和退出也会清理线程。
+        # early 是当前这一轮的“任务记录本”，不会跨模型请求复用。
+        # 传入 execute_tool，使工作线程仍调用原来的工具入口。
+        with EarlyTools(execute_tool) as early:
+            def show_text(text, output_index):
+                """文字即时显示；最终回复按编号避免重复打印。"""
+                if not streamed_items:
+                    print("助手：", end="", flush=True)
+                streamed_items.add(output_index)
+                print(text, end="", flush=True)
 
-        def show_text(text, output_index):
-            """每收到一块文字就显示；回调由网络层调用。"""
-            if not streamed_items:
-                print("助手：", end="", flush=True)
-            streamed_items.add(output_index)
-            print(text, end="", flush=True)
+            def start_tool(call):
+                """完整调用到达时，只调度只读工具；线程不会写入聊天历史。"""
+                # 这是网络层稍后会调用的函数，不是 GPT 能直接运行的工具。
+                # start 返回 True 表示任务交给线程池了，不代表读取已经完成。
+                if early.start(call):
+                    print(f"\n提前执行工具：{call['name']}（{call['call_id']}）", flush=True)
 
-        try:
-            # 开关随每次请求传递；没有开启时沿用原来的调用形式。
-            if thinking:
-                response = ask_model(messages, on_text=show_text, thinking=True)
-            else:
-                response = ask_model(messages, on_text=show_text)
-        finally:
-            # 完成、网络失败或用户中断时都结束当前文字行。
-            if streamed_items:
-                print(flush=True)
-        output = response["output"]
+            def start_attempt():
+                """失败后重新请求时，任务结果和文字去重记录都重新开始。"""
+                # 每次实际发送请求前都会到这里，首次和失败重试都一样。
+                # 旧任务清理完再接新请求，避免相同编号误领上一次结果。
+                early.reset()
+                streamed_items.clear()
 
-        # 保存模型完整输出：既有说给用户的文字，也可能有工具调用。
-        # 不要再单独添加一条 assistant 消息，否则会重复保存回答。
-        messages.extend(output)
-        tool_calls = []
-        has_text = False
-
-        for output_index, item in enumerate(output):
-            if item["type"] == "message":
-                # 一条消息可以包含多个内容块；这里只显示回答文字。
-                for content in item.get("content", []):
-                    if content["type"] == "output_text" and content["text"]:
-                        # 有些响应只提供最终文字，此时仍需正常打印。
-                        if output_index not in streamed_items:
-                            print("助手：", content["text"])
-                        has_text = True
-            elif item["type"] == "function_call":
-                # 模型说“我要用这个工具”。现在还没执行，先收集起来。
-                tool_calls.append(item)
-
-        if not tool_calls:
-            # 没有下一步行动请求，本轮就结束，回去等待用户的新任务。
-            if not has_text:
-                raise RuntimeError("模型没有返回文字或工具请求，请重试。")
-            return
-
-        for call in tool_calls:
-            print("调用工具：", call["name"], call["arguments"])
             try:
-                # arguments 是 JSON 字符串，把它还原成工具需要的参数字典。
-                arguments = json.loads(call["arguments"])
-                # Agent 只把工具名称和参数交出去，不关心具体怎么读取文件。
-                # 同一份读取状态也交给 tools.py，用来保护后续写入和编辑。
-                result = execute_tool(call["name"], arguments, read_file_state)
-            except (ValueError, KeyError, TypeError, OSError) as error:
-                # 参数错误也作为结果交回模型，让它有机会修正请求。
-                result = f"工具执行失败：{error}"
+                # 把三种通知处理函数交给 backend，再由网络层在合适时机调用：
+                # show_text：收到文字；start_tool：完整工具请求到达；
+                # start_attempt：一次发送/重试即将开始。
+                # 传函数名称是“把联系方式交出去”，不是现在就执行它们。
+                # ask_model 尚未返回时，工作线程可能已经开始读取文件。
+                response = ask_model(
+                    messages, on_text=show_text, thinking=thinking,
+                    on_tool_call=start_tool, on_attempt_start=start_attempt,
+                )
+            finally:
+                if streamed_items:
+                    print(flush=True)
+            # 执行到这里说明整轮模型请求成功完成。
+            # 提前读取只是节省时间；最终仍以完整 output 为处理依据。
+            output = response["output"]
+            # 仍然只有整轮请求成功后，才接受完整历史和工具结果。
+            # 保存模型自己给出的文字、工具请求和推理项，供下一轮继续使用。
+            # 此时还没有追加本地工具结果；下面会按调用编号逐一配对。
+            messages.extend(output)
+            # 先从完整输出中找出工具请求，按模型给出的顺序收集。
+            tool_calls = []
+            has_text = False
+            for output_index, item in enumerate(output):
+                if item["type"] == "message":
+                    for content in item.get("content", []):
+                        if content["type"] == "output_text" and content["text"]:
+                            if output_index not in streamed_items:
+                                print("助手：", content["text"])
+                            has_text = True
+                elif item["type"] == "function_call":
+                    tool_calls.append(item)
+            # 没有工具请求且有回答，就说明本次用户任务已经结束。
+            if not tool_calls:
+                if not has_text:
+                    raise RuntimeError("模型没有返回文字或工具请求，请重试。")
+                return
 
-            print("工具结果：", result)
-            # print 只能让用户看到；放进历史，下一次请求模型才能看到。
-            # call_id 把这个结果与模型刚才的那次工具请求对应起来。
-            messages.append({
-                "type": "function_call_output",
-                "call_id": call["call_id"],
-                "output": result,
-            })
-
-        # 循环回到 ask_model：这次历史里已经包含了工具执行结果。
+            for call in tool_calls:
+                print("调用工具：", call["name"], call["arguments"])
+                try:
+                    arguments = json.loads(call["arguments"])
+                    # 按原文：先找这个调用已经提前启动的任务，找到就直接取结果。
+                    # 当前调用即使是写入，也不清空其他读取任务。
+                    result = early.take(call, read_file_state)
+                    if result is None:
+                        # 没有提前任务才正常执行；写入/编辑通常走这一条。
+                        # 前后其他只读调用仍能领取自己的提前结果，不会被写操作清掉。
+                        result = execute_tool(call["name"], arguments, read_file_state)
+                except (ValueError, KeyError, TypeError, OSError) as error:
+                    result = f"工具执行失败：{error}"
+                print("工具结果：", result)
+                messages.append({
+                    "type": "function_call_output",
+                    "call_id": call["call_id"],
+                    "output": result,
+                })
+            # 结果按模型给出的顺序配对；下一轮再交回 GPT。
     raise RuntimeError("当前任务已达到 10 次模型调用上限，已暂停。")
 
 

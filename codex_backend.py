@@ -10,12 +10,24 @@ from tools import get_active_tool_definitions, get_deferred_tool_names
 MODEL = "gpt-5.5"
 
 
-def ask_model(messages, on_text=None, thinking=False):
-    """重试当前模型请求；工具执行仍由 main.py 在完整回复之后处理。"""
-    return with_retry(lambda: _ask_model_once(messages, on_text, thinking))
+def ask_model(messages, on_text=None, thinking=False, on_tool_call=None, on_attempt_start=None):
+    """重试单次模型请求；完整工具回调和重试清理通知由 Agent 处理。"""
+    # 这三个回调都是 Python 函数，不会写进发给 GPT 的 JSON：
+    # on_text 通知显示文字，on_tool_call 通知一个完整工具请求，
+    # on_attempt_start 通知 Agent 清理上一次失败尝试。
+    # backend 负责转交通知，不在这里读文件或安排线程。
+    def send_once():
+        # 回调在每次尝试前运行；重试时清理失败尝试的提前任务和显示编号。
+        if on_attempt_start is not None:
+            on_attempt_start()
+        return _ask_model_once(messages, on_text, thinking, on_tool_call)
+
+    # with_retry 每次调用 send_once，都会先清理再真正发请求。
+    # 它重试的是模型请求，不会把 main.py 已经完成的整轮工具循环重跑。
+    return with_retry(send_once)
 
 
-def _ask_model_once(messages, on_text=None, thinking=False):
+def _ask_model_once(messages, on_text=None, thinking=False, on_tool_call=None):
     # 延迟工具只把名称写进提示词；完整定义要等 ToolSearch 激活后再发送。
     deferred_names = get_deferred_tool_names()
     deferred_instruction = ""
@@ -39,6 +51,8 @@ def _ask_model_once(messages, on_text=None, thinking=False):
         raise RuntimeError("MINI_BACKEND 只能是 codex 或 openai。")
     if not model:
         raise RuntimeError("切换到 API 后端时，请设置 MINI_MODEL 为该服务可用的模型名称。")
+    # Chat Completions 没有本项目所用的单项完成通知，所以不转交工具回调。
+    # 这个路径还是收完整轮回复后，由 main.py 正常执行工具。
     if backend == "openai":
         # 官方 Chat Completions 使用 reasoning_effort，字段转换在 api_backends.py。
         if thinking:
@@ -61,5 +75,9 @@ def _ask_model_once(messages, on_text=None, thinking=False):
         "reasoning": {"effort": get_gpt_reasoning_effort(thinking)},
     }
     # 返回完整响应字典，而不是一个字符串，避免丢掉工具调用。
-    # 回调只负责实时显示文字，返回值仍然是模型完整响应。
+    # 两条同时进行的流程：收到事件时用回调通知 main.py；
+    # 收到整轮完成事件后，用 return 把完整回复交回 main.py。
+    # 可选回调为 None 时不用它，仍能单独调用 send_request。
+    if on_tool_call is not None:
+        return send_request(payload, on_text=on_text, on_tool_call=on_tool_call)
     return send_request(payload, on_text=on_text)
